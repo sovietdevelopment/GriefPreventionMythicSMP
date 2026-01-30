@@ -592,7 +592,7 @@ public class Claim
              @NotNull ClaimPermission permission,
              @Nullable Event event)
      {
-        if (event instanceof BlockEvent blockEvent && GriefPrevention.instance.config_webmc_protectworldspawn) {
+        if (event instanceof BlockEvent blockEvent && !GriefPrevention.instance.config_webmc_protectworldspawn) {
              Location loc = blockEvent.getBlock().getLocation();
              if (loc.getWorld().getName().equals("world") &&
                   loc.getBlockX() == 0 &&
