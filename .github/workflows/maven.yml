@@ -40,7 +40,7 @@ jobs:
       - name: Package artifacts
         run: |
           mkdir -p dist
-          cp ./target/*.jar ./dist
+          cp target/*.jar dist
 
       - name: Upload build
         uses: actions/upload-artifact@v4
