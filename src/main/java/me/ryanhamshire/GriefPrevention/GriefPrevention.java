@@ -138,6 +138,7 @@ public class GriefPrevention extends JavaPlugin {
                                                                  // claims
     public boolean config_claims_enderPearlsRequireAccessTrust; // whether teleporting into a claim with a pearl
                                                                 // requires access trust
+    public boolean config_claims_refundDeniedEnderPearls; // whether to refund ender pearls when teleport is denied
     public boolean config_claims_raidTriggersRequireBuildTrust; // whether raids are triggered by a player that doesn't
                                                                 // have build permission in that claim
     public int config_claims_maxClaimsPerPlayer; // maximum number of claims per player
@@ -152,7 +153,7 @@ public class GriefPrevention extends JavaPlugin {
     public int config_claims_maxAccruedBlocks_default; // the limit on accrued blocks (over time) for players without
                                                        // any special permissions. doesn't limit purchased or
                                                        // admin-gifted blocks
-    public int config_claims_minY; // minimum Y coordinate claims can reach
+    public HashMap<String, Integer> config_claims_maxDepth; // limit on how deep claims can go
     public int config_claims_expirationDays; // how many days of inactivity before a player loses his claims
     public int config_claims_expirationExemptionTotalBlocks; // total claim blocks amount which will exempt a player
                                                              // from claim expiration
@@ -190,6 +191,8 @@ public class GriefPrevention extends JavaPlugin {
     public boolean config_claims_firedamages; // whether fire will damage in claims
 
     public boolean config_claims_lecternReadingRequiresAccessTrust; // reading lecterns requires access trust
+    public boolean config_claims_hoppersRequireBuildTrust; // hoppers require build trust
+
 
     // Economy settings for buying/selling claim blocks
     public boolean config_economy_claimBlocksEnabled; // whether players can buy/sell claim blocks
@@ -758,6 +761,8 @@ public class GriefPrevention extends JavaPlugin {
                 .getBoolean("GriefPrevention.Claims.PreventNonPlayerCreatedPortals", false);
         this.config_claims_enderPearlsRequireAccessTrust = config
                 .getBoolean("GriefPrevention.Claims.EnderPearlsRequireAccessTrust", true);
+        this.config_claims_refundDeniedEnderPearls = config
+                .getBoolean("GriefPrevention.Claims.RefundDeniedEnderPearls", true);
         this.config_claims_raidTriggersRequireBuildTrust = config
                 .getBoolean("GriefPrevention.Claims.RaidTriggersRequireBuildTrust", true);
         this.config_claims_initialBlocks = config.getInt("GriefPrevention.Claims.InitialBlocks", 100);
@@ -779,41 +784,15 @@ public class GriefPrevention extends JavaPlugin {
                 .abs(config.getInt("GriefPrevention.Claims.ExtendIntoGroundDistance", 5));
         this.config_claims_minWidth = config.getInt("GriefPrevention.Claims.MinimumWidth", 5);
         this.config_claims_minArea = config.getInt("GriefPrevention.Claims.MinimumArea", 100);
-
-        this.config_claims_minY = config.getInt("GriefPrevention.Claims.MinimumY", Integer.MIN_VALUE);
-
-        // Warn if MinimumY is set above sea level, as this is likely unintended
-        if (this.config_claims_minY != Integer.MIN_VALUE) {
-            for (World world : worlds) {
-                // Only check worlds where claims are enabled
-                if (!this.claimsEnabledForWorld(world)) continue;
-
-                int minY = this.config_claims_minY;
-                int seaLevel = this.getSeaLevel(world);
-                if (minY > seaLevel) {
-                    getLogger().warning(
-                            "MinimumY (" + minY + ") is set above sea level (" + seaLevel + ") " +
-                                    "for world '" + world.getName() + "'. This prevents claims extending below Y=" +
-                                    minY + ", which may not have been intended.");
-                    break; // Show warning once only - minY is a global setting
-                }
-            }
-        }
-        
-        // minimum Y per world
-        this.config_webmc_claims_minYOverride = new HashMap<>();
+        // per-world max depth
+        this.config_claims_maxDepth = new HashMap<>();
+        int defaultMaxDepth = config.getInt("GriefPrevention.Claims.MaximumDepth.Default", Integer.MIN_VALUE);
+        outConfig.set("GriefPrevention.Claims.MaximumDepth.Default", defaultMaxDepth);
         for (World world : worlds) {
-            String configPath = "GriefPrevention.Claims.MinimumYOverrides." + world.getName();
-            if (config.contains(configPath)) {
-                int minYOverride = config.getInt(configPath);
-                outConfig.set(configPath, minYOverride);
-                this.config_webmc_claims_minYOverride.put(world.getName(), minYOverride);
-            } else {
-                // Don't write default values to config - absence means "use global setting"
-                outConfig.set(configPath, null);
-            }
+            int maxDepth = config.getInt("GriefPrevention.Claims.MaximumDepth." + world.getName(), defaultMaxDepth);
+            this.config_claims_maxDepth.put(world.getName(), maxDepth);
+            outConfig.set("GriefPrevention.Claims.MaximumDepth." + world.getName(), maxDepth);
         }
-
         this.config_claims_chestClaimExpirationDays = config.getInt("GriefPrevention.Claims.Expiration.ChestClaimDays",
                 7);
         this.config_claims_expirationDays = config.getInt("GriefPrevention.Claims.Expiration.AllClaims.DaysInactive",
@@ -845,6 +824,8 @@ public class GriefPrevention extends JavaPlugin {
         this.config_claims_firedamages = config.getBoolean("GriefPrevention.Claims.FireDamagesInClaims", false);
         this.config_claims_lecternReadingRequiresAccessTrust = config
                 .getBoolean("GriefPrevention.Claims.LecternReadingRequiresAccessTrust", true);
+        this.config_claims_hoppersRequireBuildTrust = config
+                .getBoolean("GriefPrevention.Claims.HoppersRequireBuildTrust", false);
 
         // Economy settings - disabled by default
         this.config_economy_claimBlocksEnabled = config.getBoolean("GriefPrevention.Economy.ClaimBlocksEnabled", false);
@@ -1010,6 +991,8 @@ public class GriefPrevention extends JavaPlugin {
         outConfig.set("GriefPrevention.Claims.LockFenceGates", this.config_claims_lockFenceGates);
         outConfig.set("GriefPrevention.Claims.EnderPearlsRequireAccessTrust",
                 this.config_claims_enderPearlsRequireAccessTrust);
+        outConfig.set("GriefPrevention.Claims.RefundDeniedEnderPearls",
+                this.config_claims_refundDeniedEnderPearls);
         outConfig.set("GriefPrevention.Claims.RaidTriggersRequireBuildTrust",
                 this.config_claims_raidTriggersRequireBuildTrust);
         outConfig.set("GriefPrevention.Claims.ProtectHorses", this.config_claims_protectHorses);
@@ -1029,7 +1012,7 @@ public class GriefPrevention extends JavaPlugin {
                 this.config_claims_claimsExtendIntoGroundDistance);
         outConfig.set("GriefPrevention.Claims.MinimumWidth", this.config_claims_minWidth);
         outConfig.set("GriefPrevention.Claims.MinimumArea", this.config_claims_minArea);
-        outConfig.set("GriefPrevention.Claims.MaximumDepth", this.config_claims_minY);
+        outConfig.set("GriefPrevention.Claims.MaximumDepth", this.config_claims_maxDepth);
         outConfig.set("GriefPrevention.Claims.InvestigationTool", this.config_claims_investigationTool.name());
         outConfig.set("GriefPrevention.Claims.ModificationTool", this.config_claims_modificationTool.name());
         outConfig.set("GriefPrevention.Claims.Expiration.ChestClaimDays", this.config_claims_chestClaimExpirationDays);
@@ -1054,6 +1037,8 @@ public class GriefPrevention extends JavaPlugin {
         outConfig.set("GriefPrevention.Claims.FireDamagesInClaims", config_claims_firedamages);
         outConfig.set("GriefPrevention.Claims.LecternReadingRequiresAccessTrust",
                 config_claims_lecternReadingRequiresAccessTrust);
+        outConfig.set("GriefPrevention.Claims.HoppersRequireBuildTrust",
+                this.config_claims_hoppersRequireBuildTrust);
 
         // Economy settings
         outConfig.set("GriefPrevention.Economy.ClaimBlocksEnabled", this.config_economy_claimBlocksEnabled);
@@ -1233,6 +1218,14 @@ public class GriefPrevention extends JavaPlugin {
         } else {
             return null;
         }
+    }
+
+    public int getMaxDepthForWorld(World world) {
+        Integer maxDepth = this.config_claims_maxDepth.get(world.getName());
+        if (maxDepth == null) {
+            return Integer.MIN_VALUE; // default to min value if not set
+        }
+        return maxDepth;
     }
 
     private void setUpCommands() {
@@ -1550,7 +1543,7 @@ public class GriefPrevention extends JavaPlugin {
                         inheritedManagers);
 
                 Predicate<String> isDeniedBuilder = id -> claim.isPermissionDenied(id, ClaimPermission.Build);
-                Predicate<String> isDeniedContainer = id -> claim.isPermissionDenied(id, ClaimPermission.Inventory);
+                Predicate<String> isDeniedContainer = id -> claim.isPermissionDenied(id, ClaimPermission.Container);
                 Predicate<String> isDeniedAccessor = id -> claim.isPermissionDenied(id, ClaimPermission.Access);
                 Predicate<String> isDeniedManager = id -> claim.isPermissionDenied(id, ClaimPermission.Manage);
 
@@ -1865,7 +1858,7 @@ public class GriefPrevention extends JavaPlugin {
             if (args.length != 1)
                 return false;
 
-            this.handleTrustCommand(player, ClaimPermission.Inventory, args[0], false);
+            this.handleTrustCommand(player, ClaimPermission.Container, args[0], false);
 
             return true;
         }
@@ -1939,7 +1932,7 @@ public class GriefPrevention extends JavaPlugin {
                         if (currentContainers.contains(container)) {
                             // Check if this container permission matches the parent's container permission
                             ClaimPermission childPerm = claim.getPermission(container.toLowerCase());
-                            if (childPerm == ClaimPermission.Inventory) {
+                            if (childPerm == ClaimPermission.Container) {
                                 claim.dropPermission(container);
                             }
                         }
@@ -3027,7 +3020,7 @@ public class GriefPrevention extends JavaPlugin {
                 permissionDescription = this.dataStore.getMessage(Messages.BuildPermission);
             } else if (permissionLevel == ClaimPermission.Access) {
                 permissionDescription = this.dataStore.getMessage(Messages.AccessPermission);
-            } else // ClaimPermission.Inventory
+            } else // ClaimPermission.Container
             {
                 permissionDescription = this.dataStore.getMessage(Messages.ContainersPermission);
             }
@@ -3590,10 +3583,6 @@ public class GriefPrevention extends JavaPlugin {
         }
     }
 
-    public int getMinY(World world) {
-        return this.config_webmc_claims_minYOverride.getOrDefault(world.getName(), this.config_claims_minY);
-    }
-
     public boolean containsBlockedIP(String message) {
         message = message.replace("\r\n", "");
         Pattern ipAddressPattern = Pattern.compile("([0-9]{1,3}\\.){3}[0-9]{1,3}");
@@ -4008,14 +3997,10 @@ public class GriefPrevention extends JavaPlugin {
             claim.parent.getPermissions(inheritedBuilders, inheritedContainers, inheritedAccessors,
                     inheritedManagers);
 
-            java.util.function.Predicate<String> isDeniedBuilder = id -> claim.isPermissionDenied(id,
-                    ClaimPermission.Build);
-            java.util.function.Predicate<String> isDeniedContainer = id -> claim.isPermissionDenied(id,
-                    ClaimPermission.Inventory);
-            java.util.function.Predicate<String> isDeniedAccessor = id -> claim.isPermissionDenied(id,
-                    ClaimPermission.Access);
-            java.util.function.Predicate<String> isDeniedManager = id -> claim.isPermissionDenied(id,
-                    ClaimPermission.Manage);
+            java.util.function.Predicate<String> isDeniedBuilder = id -> claim.isPermissionDenied(id, ClaimPermission.Build);
+            java.util.function.Predicate<String> isDeniedContainer = id -> claim.isPermissionDenied(id, ClaimPermission.Container);
+            java.util.function.Predicate<String> isDeniedAccessor = id -> claim.isPermissionDenied(id, ClaimPermission.Access);
+            java.util.function.Predicate<String> isDeniedManager = id -> claim.isPermissionDenied(id, ClaimPermission.Manage);
 
             inheritedBuilders.removeIf(isDeniedBuilder);
             inheritedContainers.removeIf(isDeniedContainer);

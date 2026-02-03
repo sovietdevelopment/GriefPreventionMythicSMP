@@ -186,7 +186,7 @@ public class Claim
 
         for (String containerID : containerIDs)
         {
-            this.setPermission(containerID, ClaimPermission.Inventory);
+            this.setPermission(containerID, ClaimPermission.Container);
         }
 
         for (String accessorID : accessorIDs)
@@ -318,7 +318,7 @@ public class Claim
         {
             case Manage -> "#manager";
             case Build -> "#build";
-            case Inventory -> "#inventory";
+            case Container -> "#inventory";
             case Access -> "#access";
             case Edit -> "";
         };
@@ -651,7 +651,7 @@ public class Claim
             }
 
             if (material != null && placeableForFarming(material)
-                    && this.getDefaultDenial(player, uuid, ClaimPermission.Inventory, event) == null)
+                    && this.getDefaultDenial(player, uuid, ClaimPermission.Container, event) == null)
             {
                 return null;
             }
@@ -738,7 +738,7 @@ public class Claim
      @Deprecated
      public @Nullable String allowContainers(@NotNull Player player)
      {
-         Supplier<String> supplier = checkPermission(player, ClaimPermission.Inventory, null);
+         Supplier<String> supplier = checkPermission(player, ClaimPermission.Container, null);
          return supplier != null ? supplier.get() : null;
      }
 
@@ -820,7 +820,7 @@ public class Claim
              {
                  builders.add(entry.getKey());
              }
-             else if (entry.getValue() == ClaimPermission.Inventory)
+             else if (entry.getValue() == ClaimPermission.Container)
              {
                  containers.add(entry.getKey());
              }
