@@ -1535,8 +1535,7 @@ public class GriefPrevention extends JavaPlugin {
 
             boolean canInheritForDisplay = claim.parent != null
                     && claim.parent.parent == null
-                    && !claim.getSubclaimRestrictions()
-                    && !claim.is3D();
+                    && !claim.getSubclaimRestrictions();
 
             if (canInheritForDisplay) {
                 claim.parent.getPermissions(inheritedBuilders, inheritedContainers, inheritedAccessors,
@@ -3990,8 +3989,7 @@ public class GriefPrevention extends JavaPlugin {
 
         boolean canInheritForDisplay = claim.parent != null
                 && claim.parent.parent == null
-                && !claim.getSubclaimRestrictions()
-                && !claim.is3D();
+                && !claim.getSubclaimRestrictions();
 
         if (canInheritForDisplay) {
             claim.parent.getPermissions(inheritedBuilders, inheritedContainers, inheritedAccessors,
