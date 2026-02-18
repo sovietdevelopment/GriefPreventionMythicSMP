@@ -246,7 +246,40 @@ public class UnifiedAdminClaimCommand extends UnifiedCommandHandler {
     }
 
     private boolean handleIgnore(CommandSender sender, String[] args) {
-        if (!(sender instanceof Player player)) return false;
+        if (!(sender instanceof Player player)){
+            // console sender
+            if (args.length > 1){
+                OfflinePlayer targetPlayer = plugin.resolvePlayerByName(args[0]);
+                if (targetPlayer == null) {
+                    sender.sendMessage("Player not found: " + args[0]);
+                    return true;
+                }
+                PlayerData playerData = plugin.dataStore.getPlayerData(targetPlayer.getUniqueId());
+                if (args.length == 2 && args[1].equalsIgnoreCase("on")) {
+                    playerData.ignoreClaims = true;
+                    sender.sendMessage("Now ignoring claims for " + targetPlayer.getName());
+                    return true;
+                } else if (args.length == 2 && args[1].equalsIgnoreCase("off")) {
+                    playerData.ignoreClaims = false;
+                    sender.sendMessage("Now respecting claims for " + targetPlayer.getName());
+                    return true;
+                }
+                else if (args.length == 1) {
+                    playerData.ignoreClaims = !playerData.ignoreClaims;
+                    sender.sendMessage(
+                        "Toggled claim ignoring for " + targetPlayer.getName() + ". Now ignoring claims: " + playerData.ignoreClaims
+                    );
+                    return true;
+                }
+                else {
+                    sender.sendMessage("Usage: /aclaim ignore <player> [on|off]");
+                    return true;
+                }
+            } else {
+                sender.sendMessage("Usage: /aclaim ignore <player>");
+                return true;
+            }
+        }
 
         // Permission check - requires griefprevention.ignoreclaims
         if (!player.hasPermission("griefprevention.ignoreclaims")) {
