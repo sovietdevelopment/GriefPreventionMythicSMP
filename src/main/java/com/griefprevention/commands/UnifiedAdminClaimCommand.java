@@ -3,6 +3,7 @@ package com.griefprevention.commands;
 import me.ryanhamshire.GriefPrevention.*;
 import me.ryanhamshire.GriefPrevention.DataStore.NoTransferException;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -246,21 +247,45 @@ public class UnifiedAdminClaimCommand extends UnifiedCommandHandler {
     }
 
     private boolean handleIgnore(CommandSender sender, String[] args) {
-        if (!(sender instanceof Player player)) return false;
-
-        // Permission check - requires griefprevention.ignoreclaims
-        if (!player.hasPermission("griefprevention.ignoreclaims")) {
-            GriefPrevention.sendMessage(player, TextMode.Err, Messages.NoPermissionForCommand);
-            return true;
-        }
-
-        PlayerData playerData = plugin.dataStore.getPlayerData(player.getUniqueId());
-        playerData.ignoreClaims = !playerData.ignoreClaims;
-
-        if (!playerData.ignoreClaims) {
-            GriefPrevention.sendMessage(player, TextMode.Success, Messages.RespectingClaims);
+        if (sender instanceof Player player) {
+            // Permission check - requires griefprevention.ignoreclaims
+            if (player.hasPermission("griefprevention.ignoreclaims")) {
+                final PlayerData playerData = plugin.dataStore.getPlayerData(player.getUniqueId());
+                playerData.ignoreClaims = !playerData.ignoreClaims;
+                if (!playerData.ignoreClaims) {
+                    GriefPrevention.sendMessage(player, TextMode.Success, Messages.RespectingClaims);
+                } else {
+                    GriefPrevention.sendMessage(player, TextMode.Success, Messages.IgnoringClaims);
+                }
+            } else {
+                GriefPrevention.sendMessage(player, TextMode.Err, Messages.NoPermissionForCommand);
+            }
         } else {
-            GriefPrevention.sendMessage(player, TextMode.Success, Messages.IgnoringClaims);
+            // console sender
+            if (args.length > 1) {
+                final OfflinePlayer targetPlayer = plugin.resolvePlayerByName(args[0]);
+                if (targetPlayer != null) {
+                    final PlayerData playerData = plugin.dataStore.getPlayerData(targetPlayer.getUniqueId());
+                    if (args.length == 2 && args[1].equalsIgnoreCase("on")) {
+                        playerData.ignoreClaims = true;
+                        sender.sendMessage(ChatColor.GREEN + "Now ignoring claims for " + targetPlayer.getName());
+                    } else if (args.length == 2 && args[1].equalsIgnoreCase("off")) {
+                        playerData.ignoreClaims = false;
+                        sender.sendMessage(ChatColor.GREEN + "Now respecting claims for " + targetPlayer.getName());
+                    } else if (args.length == 1) {
+                        playerData.ignoreClaims = !playerData.ignoreClaims;
+                        sender.sendMessage(
+                            ChatColor.GREEN + "Toggled claim ignoring for " + targetPlayer.getName() + ". Now ignoring claims: " + playerData.ignoreClaims
+                        );
+                    } else {
+                        sender.sendMessage(ChatColor.RED + "Usage: /aclaim ignore <player> [on|off]");
+                    }
+                } else {
+                    sender.sendMessage(ChatColor.RED + "Player not found: " + args[0]);
+                }
+            } else {
+                sender.sendMessage(ChatColor.RED + "Usage: /aclaim ignore <player>");
+            }
         }
         return true;
     }
