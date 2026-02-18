@@ -844,6 +844,8 @@ public class GriefPrevention extends JavaPlugin {
                 "1.2.3.4; 5.6.7.8");
         this.config_spam_banOffenders = config.getBoolean("GriefPrevention.Spam.BanOffenders", true);
         this.config_spam_banMessage = config.getString("GriefPrevention.Spam.BanMessage", "Banned for spam.");
+        this.config_spam_deathMessageCooldownSeconds = config.getInt("GriefPrevention.Spam.DeathMessageCooldownSeconds", 120);
+        this.config_spam_logoutMessageDelaySeconds = config.getInt("GriefPrevention.Spam.Logout Message Delay In Seconds", 0);
         String slashCommandsToMonitor = config.getString("GriefPrevention.Spam.MonitorSlashCommands",
                 "/me;/global;/local");
         slashCommandsToMonitor = config.getString("GriefPrevention.Spam.ChatSlashCommands", slashCommandsToMonitor);
@@ -1883,10 +1885,11 @@ public class GriefPrevention extends JavaPlugin {
                 return true;
             }
 
-            // Only the owner of the parent claim may toggle restrictions. Admin claims
-            // require admin permission.
-            if (!player.hasPermission("griefprevention.adminclaims")) {
-                GriefPrevention.sendMessage(player, TextMode.Err, Messages.NoAdminClaimsPermission);
+            // If player has /ignoreclaims on, continue
+            // If admin claim, fail if this user is not an admin
+            // If not an admin claim, fail if this user is not the owner
+            if (!playerData.ignoreClaims && (claim.isAdminClaim() ? !player.hasPermission("griefprevention.adminclaims") : !player.getUniqueId().equals(claim.parent.ownerID))) {
+                GriefPrevention.sendMessage(player, TextMode.Err, Messages.OnlyOwnersModifyClaims, claim.getOwnerName());
                 return true;
             }
 
@@ -1894,60 +1897,6 @@ public class GriefPrevention extends JavaPlugin {
                 claim.setSubclaimRestrictions(false);
                 GriefPrevention.sendMessage(player, TextMode.Success, Messages.SubclaimUnrestricted);
             } else {
-                // When restricting, remove inherited permissions but keep explicit ones
-                if (claim.parent != null && !claim.getSubclaimRestrictions()) {
-                    // Get all permissions from parent that would be inherited
-                    ArrayList<String> parentBuilders = new ArrayList<>();
-                    ArrayList<String> parentContainers = new ArrayList<>();
-                    ArrayList<String> parentAccessors = new ArrayList<>();
-                    ArrayList<String> parentManagers = new ArrayList<>();
-                    claim.parent.getPermissions(parentBuilders, parentContainers, parentAccessors, parentManagers);
-
-                    // Get current permissions in this claim
-                    ArrayList<String> currentBuilders = new ArrayList<>();
-                    ArrayList<String> currentContainers = new ArrayList<>();
-                    ArrayList<String> currentAccessors = new ArrayList<>();
-                    ArrayList<String> currentManagers = new ArrayList<>();
-                    claim.getPermissions(currentBuilders, currentContainers, currentAccessors, currentManagers);
-
-                    // Remove permissions that exist in both parent and child (inherited ones)
-                    for (String manager : parentManagers) {
-                        if (currentManagers.contains(manager)) {
-                            claim.managers.remove(manager);
-                        }
-                    }
-
-                    for (String builder : parentBuilders) {
-                        if (currentBuilders.contains(builder)) {
-                            // Check if this builder permission matches the parent's builder permission
-                            ClaimPermission childPerm = claim.getPermission(builder.toLowerCase());
-                            if (childPerm == ClaimPermission.Build) {
-                                claim.dropPermission(builder);
-                            }
-                        }
-                    }
-
-                    for (String container : parentContainers) {
-                        if (currentContainers.contains(container)) {
-                            // Check if this container permission matches the parent's container permission
-                            ClaimPermission childPerm = claim.getPermission(container.toLowerCase());
-                            if (childPerm == ClaimPermission.Container) {
-                                claim.dropPermission(container);
-                            }
-                        }
-                    }
-
-                    for (String accessor : parentAccessors) {
-                        if (currentAccessors.contains(accessor)) {
-                            // Check if this accessor permission matches the parent's accessor permission
-                            ClaimPermission childPerm = claim.getPermission(accessor.toLowerCase());
-                            if (childPerm == ClaimPermission.Access) {
-                                claim.dropPermission(accessor);
-                            }
-                        }
-                    }
-                }
-
                 claim.setSubclaimRestrictions(true);
                 GriefPrevention.sendMessage(player, TextMode.Success, Messages.SubclaimRestricted);
             }
@@ -1999,20 +1948,26 @@ public class GriefPrevention extends JavaPlugin {
         }
         // deleteclaim
         else if (cmd.getName().equalsIgnoreCase("deleteclaim") && player != null) {
-            // determine which claim the player is standing in
-            Claim claim = this.dataStore.getClaimAt(player.getLocation(), false /* ignore height */, null);
+            PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
+            // Prefer claim selected via shovel corner (selection session) when set
+            Claim claim = playerData.claimResizing != null ? playerData.claimResizing
+                    : this.dataStore.getClaimAt(player.getLocation(), false /* ignore height */, null);
 
             if (claim == null) {
                 GriefPrevention.sendMessage(player, TextMode.Err, Messages.DeleteClaimMissing);
             } else {
                 // deleting an admin claim additionally requires the adminclaims permission
                 if (!claim.isAdminClaim() || player.hasPermission("griefprevention.adminclaims")) {
-                    PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
                     if (claim.children.size() > 0 && !playerData.warnedAboutMajorDeletion) {
                         GriefPrevention.sendMessage(player, TextMode.Warn, Messages.DeletionSubdivisionWarning);
                         playerData.warnedAboutMajorDeletion = true;
                     } else {
                         this.dataStore.deleteClaim(claim, true, true);
+
+                        if (playerData.claimResizing == claim) {
+                            playerData.claimResizing = null;
+                            playerData.lastShovelLocation = null;
+                        }
 
                         GriefPrevention.sendMessage(player, TextMode.Success, Messages.DeleteSuccess);
                         GriefPrevention
@@ -2530,6 +2485,38 @@ public class GriefPrevention extends JavaPlugin {
             return true;
         }
 
+        // givepet
+        else if (cmd.getName().equalsIgnoreCase("givepet") && player != null) {
+            //requires one parameter
+            if (args.length < 1) return false;
+
+            PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
+
+            //special case: cancellation
+            if (args[0].equalsIgnoreCase("cancel")) {
+                playerData.petGiveawayRecipient = null;
+                GriefPrevention.sendMessage(player, TextMode.Success, Messages.PetTransferCancellation);
+                return true;
+            }
+
+            //find the specified player
+            OfflinePlayer targetPlayer = this.resolvePlayerByName(args[0]);
+            if (targetPlayer == null
+                    || !targetPlayer.isOnline() && !targetPlayer.hasPlayedBefore()
+                    || targetPlayer.getName() == null) {
+                GriefPrevention.sendMessage(player, TextMode.Err, Messages.PlayerNotFound2);
+                return true;
+            }
+
+            //remember the player's ID for later pet transfer
+            playerData.petGiveawayRecipient = targetPlayer;
+
+            //send instructions
+            GriefPrevention.sendMessage(player, TextMode.Instr, Messages.ReadyToTransferPet);
+
+            return true;
+        }
+
         // trapped
         else if (cmd.getName().equalsIgnoreCase("trapped") && player != null) {
             // FEATURE: empower players who get "stuck" in an area where they don't have
@@ -2787,8 +2774,9 @@ public class GriefPrevention extends JavaPlugin {
     public boolean abandonClaimHandler(Player player, boolean deleteTopLevelClaim) {
         PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
 
-        // which claim is being abandoned?
-        Claim claim = this.dataStore.getClaimAt(player.getLocation(), false, playerData.lastClaim);
+        // Prefer claim selected via shovel corner (selection session) when set
+        Claim claim = playerData.claimResizing != null ? playerData.claimResizing
+                : this.dataStore.getClaimAt(player.getLocation(), false, playerData.lastClaim);
 
         // if no claim here, nothing to abandon
         if (claim == null) {
@@ -2809,6 +2797,12 @@ public class GriefPrevention extends JavaPlugin {
         } else {
             // delete it
             this.dataStore.deleteClaim(claim, true, false);
+
+            // clear selection session if we were deleting the selected claim
+            if (playerData.claimResizing == claim) {
+                playerData.claimResizing = null;
+                playerData.lastShovelLocation = null;
+            }
 
             // adjust claim blocks when abandoning a top level claim
             if (this.config_claims_abandonReturnRatio != 1.0D && claim.parent == null
