@@ -1878,30 +1878,7 @@ public class GriefPrevention extends JavaPlugin {
 
         // restrictsubclaim
         else if (cmd.getName().equalsIgnoreCase("restrictsubclaim") && player != null) {
-            PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
-            Claim claim = this.dataStore.getClaimAt(player.getLocation(), true, playerData.lastClaim);
-            if (claim == null || claim.parent == null) {
-                GriefPrevention.sendMessage(player, TextMode.Err, Messages.StandInSubclaim);
-                return true;
-            }
-
-            // If player has /ignoreclaims on, continue
-            // If admin claim, fail if this user is not an admin
-            // If not an admin claim, fail if this user is not the owner
-            if (!playerData.ignoreClaims && (claim.isAdminClaim() ? !player.hasPermission("griefprevention.adminclaims") : !player.getUniqueId().equals(claim.parent.ownerID))) {
-                GriefPrevention.sendMessage(player, TextMode.Err, Messages.OnlyOwnersModifyClaims, claim.getOwnerName());
-                return true;
-            }
-
-            if (claim.getSubclaimRestrictions()) {
-                claim.setSubclaimRestrictions(false);
-                GriefPrevention.sendMessage(player, TextMode.Success, Messages.SubclaimUnrestricted);
-            } else {
-                claim.setSubclaimRestrictions(true);
-                GriefPrevention.sendMessage(player, TextMode.Success, Messages.SubclaimRestricted);
-            }
-            this.dataStore.saveClaim(claim);
-            return true;
+            return this.handleRestrictSubclaimCommand(player, new String[]{});
         }
 
         // adminclaims
@@ -4153,21 +4130,95 @@ public class GriefPrevention extends JavaPlugin {
         PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
         Claim claim = this.dataStore.getClaimAt(player.getLocation(), true, playerData.lastClaim);
 
-        if (claim == null || claim.parent == null) {
+        if (claim == null) {
             GriefPrevention.sendMessage(player, TextMode.Err, Messages.StandInSubclaim);
             return true;
         }
 
+        // If in a main claim (no parent), toggle the flag for future subdivisions
+        if (claim.parent == null) {
+            // If admin claim, fail if this user is not an admin
+            // If not an admin claim, fail if this user is not the owner
+            if (!playerData.ignoreClaims && (claim.isAdminClaim() ? !player.hasPermission("griefprevention.adminclaims") : !player.getUniqueId().equals(claim.ownerID))) {
+                GriefPrevention.sendMessage(player, TextMode.Err, Messages.OnlyOwnersModifyClaims, claim.getOwnerName());
+                return true;
+            }
+
+            if (claim.getInheritNothingForNewSubdivisions()) {
+                claim.setInheritNothingForNewSubdivisions(false);
+                // Also unrestrict all existing subdivisions
+                for (Claim child : claim.children) {
+                    child.setSubclaimRestrictions(false);
+                }
+                GriefPrevention.sendMessage(player, TextMode.Success, Messages.MainClaimSubdivisionInheritEnabled);
+            } else {
+                claim.setInheritNothingForNewSubdivisions(true);
+                // Also restrict all existing subdivisions
+                for (Claim child : claim.children) {
+                    if (!child.getSubclaimRestrictions()) {
+                        removeInheritedPermissions(child);
+                    }
+                    child.setSubclaimRestrictions(true);
+                }
+                GriefPrevention.sendMessage(player, TextMode.Success, Messages.MainClaimSubdivisionInheritDisabled);
+            }
+            this.dataStore.saveClaim(claim);
+            return true;
+        }
+
+        // Original logic for subdivisions
         if (claim.getSubclaimRestrictions()) {
             claim.setSubclaimRestrictions(false);
             GriefPrevention.sendMessage(player, TextMode.Success, Messages.SubclaimUnrestricted);
         } else {
+            removeInheritedPermissions(claim);
             claim.setSubclaimRestrictions(true);
             GriefPrevention.sendMessage(player, TextMode.Success, Messages.SubclaimRestricted);
         }
 
         this.dataStore.saveClaim(claim);
         return true;
+    }
+
+    private void removeInheritedPermissions(Claim claim) {
+        if (claim.parent == null) return;
+
+        ArrayList<String> parentBuilders = new ArrayList<>();
+        ArrayList<String> parentContainers = new ArrayList<>();
+        ArrayList<String> parentAccessors = new ArrayList<>();
+        ArrayList<String> parentManagers = new ArrayList<>();
+        claim.parent.getPermissions(parentBuilders, parentContainers, parentAccessors, parentManagers);
+
+        ArrayList<String> currentBuilders = new ArrayList<>();
+        ArrayList<String> currentContainers = new ArrayList<>();
+        ArrayList<String> currentAccessors = new ArrayList<>();
+        ArrayList<String> currentManagers = new ArrayList<>();
+        claim.getPermissions(currentBuilders, currentContainers, currentAccessors, currentManagers);
+
+        for (String manager : parentManagers) {
+            claim.managers.remove(manager.toLowerCase());
+        }
+
+        for (String builder : parentBuilders) {
+            ClaimPermission childPerm = claim.getPermission(builder.toLowerCase());
+            if (childPerm == ClaimPermission.Build) {
+                claim.dropPermission(builder);
+            }
+        }
+
+        for (String container : parentContainers) {
+            ClaimPermission childPerm = claim.getPermission(container.toLowerCase());
+            if (childPerm == ClaimPermission.Container) {
+                claim.dropPermission(container);
+            }
+        }
+
+        for (String accessor : parentAccessors) {
+            ClaimPermission childPerm = claim.getPermission(accessor.toLowerCase());
+            if (childPerm == ClaimPermission.Access) {
+                claim.dropPermission(accessor);
+            }
+        }
     }
 
     public boolean handleDropsCommand(CommandSender sender, String[] args) {

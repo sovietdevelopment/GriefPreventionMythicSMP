@@ -554,6 +554,9 @@ public class FlatFileDataStore extends DataStore
 
         boolean inheritNothing = yaml.getBoolean("inheritNothing");
 
+        // Load inheritNothingForNewSubdivisions setting (default false = inherit)
+        boolean inheritNothingForNewSubdivisions = yaml.getBoolean("inheritNothingForNewSubdivisions", false);
+
         out_parentID.add(yaml.getLong("Parent Claim ID", -1L));
 
         // Add is3D flag
@@ -572,6 +575,7 @@ public class FlatFileDataStore extends DataStore
         claim.areExplosivesAllowed = explosivesAllowed;
 
         claim.allowPvP = allowPvP;
+        claim.setInheritNothingForNewSubdivisions(inheritNothingForNewSubdivisions);
 
         ConfigurationSection childrenSection = yaml.getConfigurationSection("Children");
         if (childrenSection != null)
@@ -627,10 +631,6 @@ public class FlatFileDataStore extends DataStore
 
         boolean inheritNothing = section.getBoolean("inheritNothing");
         boolean is3D = section.getBoolean("Is3D", false);
-        // Migration: first-child 3D subdivisions should inherit (inheritNothing=false)
-        if (is3D && inheritNothing && parent != null && parent.parent == null) {
-            inheritNothing = false;
-        }
 
         // Load WebMC flags
         boolean allowPvP = section.getBoolean("AllowPvP", false);
@@ -723,6 +723,7 @@ public class FlatFileDataStore extends DataStore
 
         section.set("Parent Claim ID", claim.parent == null ? -1L : claim.parent.id);
         section.set("inheritNothing", claim.getSubclaimRestrictions());
+        section.set("inheritNothingForNewSubdivisions", claim.getInheritNothingForNewSubdivisions());
         section.set("Is3D", claim.is3D());
         section.set("Explosives Allowed", claim.areExplosivesAllowed);
         section.set("Modified Date", claim.modifiedDate != null ? claim.modifiedDate.getTime() : System.currentTimeMillis());
