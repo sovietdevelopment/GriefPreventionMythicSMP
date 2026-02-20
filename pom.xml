@@ -175,7 +175,7 @@
         <dependency>
             <groupId>org.jetbrains</groupId>
             <artifactId>annotations</artifactId>
-            <version>26.0.2-1</version>
+            <version>26.1.0</version>
             <!-- Annotations are not required at runtime, only during compilation. -->
             <scope>provided</scope>
         </dependency>
@@ -191,7 +191,7 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.14.2</version>
+            <version>5.14.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
