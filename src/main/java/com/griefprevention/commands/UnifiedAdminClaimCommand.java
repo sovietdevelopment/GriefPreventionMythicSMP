@@ -351,6 +351,17 @@ public class UnifiedAdminClaimCommand extends UnifiedCommandHandler {
     }
 
     private boolean handleBlocks(CommandSender sender, String[] args) {
+        // Look, I really don't want to fix permissions of dynamic cmd and plugin.yml and alias perms stuff: (unifiedcommandhandler.java)
+        // So I will assume this is the ONLY command that has a perms glitch and just stubbornly fix it in this brutal hardcoded way of checking onCommand
+        // Idk why I even have to do this, original code doesn't need checks here
+        // But I didn't modify any other /com/griefprevention/commands files so idk why I still have to
+        if (sender instanceof Player player) { // only check on player, console is good
+            if (!player.hasPermission("griefprevention.adjustclaimblocks")) { // REMEMBER TO GET A BETER SOLUTION LATER
+                GriefPrevention.sendMessage(player, TextMode.Err, Messages.NoPermissionForCommand); // THIS IS ABSOLUTE AHH
+                return true;
+            }
+        }
+
         // Usage: /aclaim blocks <bonus|accrued> <player|all> <amount>
         if (args.length < 3) {
             if (sender instanceof Player) {
