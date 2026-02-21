@@ -365,6 +365,13 @@ public class UnifiedAdminClaimCommand extends UnifiedCommandHandler {
             return true;
         }
 
+        if (sender instanceof Player player) { // REMEMBER TO GET A BETER SOLUTION LATER THIS IS ABSOLUTE AHH
+            if (!player.hasPermission("griefprevention.adjustclaimblocks")) { // garbage vro
+                GriefPrevention.sendMessage(player, TextMode.Err, Messages.NoPermissionForCommand);
+                return true;
+            }
+        }
+
         String type = args[0].toLowerCase();
         String target = args[1];
         int amount;
