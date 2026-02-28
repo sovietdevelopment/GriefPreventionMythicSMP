@@ -41,6 +41,7 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Waterlogged;
 import org.bukkit.entity.AbstractHorse;
 import org.bukkit.entity.Animals;
+import org.bukkit.entity.CopperGolem;
 import org.bukkit.entity.Creature;
 import org.bukkit.entity.Donkey;
 import org.bukkit.entity.Entity;
@@ -74,6 +75,7 @@ import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.entity.PlayerLeashEntityEvent;
+import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.event.player.PlayerLoginEvent.Result;
@@ -126,6 +128,9 @@ class PlayerEventHandler implements Listener {
 
     // timestamps of login and logout notifications in the last minute
     private final ArrayList<Long> recentLoginLogoutNotifications = new ArrayList<>();
+
+    // prevent duplicate rollbacks when multiple tick checks find player at denied destination
+    private final Set<UUID> pendingEnderPearlRollbacks = ConcurrentHashMap.newKeySet();
 
     // regex pattern for the "how do i claim land?" scanner
     private Pattern howToClaimPattern = null;
@@ -630,9 +635,7 @@ class PlayerEventHandler implements Listener {
 
     static void makeSocialLogEntry(String name, String message) {
         StringBuilder entryBuilder = new StringBuilder(name);
-        for (int i = name.length(); i < longestNameLength; i++) {
-            entryBuilder.append(' ');
-        }
+        entryBuilder.append(" ".repeat(Math.max(0, longestNameLength - name.length())));
         entryBuilder.append(": ").append(message);
 
         longestNameLength = Math.max(longestNameLength, name.length());
@@ -838,8 +841,8 @@ class PlayerEventHandler implements Listener {
                 if (player.getPortalCooldown() > 8 && player.hasMetadata("GP_PORTALRESCUE")) {
                     GriefPrevention.AddLogEntry(
                             "Rescued " + player.getName() + " from a nether portal.\nTeleported from "
-                                    + player.getLocation().toString() + " to "
-                                    + ((Location) player.getMetadata("GP_PORTALRESCUE").get(0).value()).toString(),
+                                    + GriefPrevention.getfriendlyLocationString(player.getLocation()) + " to "
+                                    + GriefPrevention.getfriendlyLocationString((Location) player.getMetadata("GP_PORTALRESCUE").get(0).value()),
                             CustomLogEntryTypes.Debug);
                     player.teleport((Location) player.getMetadata("GP_PORTALRESCUE").get(0).value());
                     player.removeMetadata("GP_PORTALRESCUE", instance);
@@ -1053,11 +1056,65 @@ class PlayerEventHandler implements Listener {
         }
     }
 
+    /** Folia/Canvas-safe teleport: uses teleportAsync when in region threading, else teleport. */
+    private static void teleportFoliaSafe(Player player, Location location) {
+        try {
+            player.getClass().getMethod("teleportAsync", Location.class).invoke(player, location);
+        } catch (Exception e) {
+            player.teleport(location);
+        }
+    }
+
+    // Fallback for Canvas/Folia: PlayerTeleportEvent may not fire for ender pearls. Use
+    // ProjectileHitEvent to detect the landing, then verify/rollback on next tick.
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
+    public void onProjectileHitEnderPearl(ProjectileHitEvent event) {
+        if (event.getEntity().getType() != EntityType.ENDER_PEARL) return;
+        if (!instance.config_claims_enderPearlsRequireAccessTrust) return;
+        if (!(event.getEntity().getShooter() instanceof Player shooter)) return;
+        if (!instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
+
+        // Player lands on top of hit block (or at pearl location if hit entity)
+        Block hitBlock = event.getHitBlock();
+        Location destLoc = hitBlock != null
+                ? hitBlock.getLocation().add(0.5, 1, 0.5)
+                : event.getEntity().getLocation();
+        Location fromLoc = shooter.getLocation().clone();
+        UUID playerID = shooter.getUniqueId();
+        // Canvas may teleport the player several ticks after ProjectileHitEvent. Run check at
+        // 1, 2, 3 ticks until we find the player at destination (tick+2 typically on Canvas).
+        for (long delay = 1; delay <= 3; delay++) {
+            final long d = delay;
+            SchedulerUtil.runLaterGlobal(instance, () -> {
+                Player p = instance.getServer().getPlayer(playerID);
+                if (p == null || !p.isOnline()) return;
+                Location now = p.getLocation();
+                if (now.getWorld() != destLoc.getWorld()) return;
+                double distSq = now.distanceSquared(destLoc);
+                if (distSq > 25) return; // not at pearl landing (5 block radius)
+                Supplier<String> noAccessReason = ProtectionHelper.checkPermission(p, now,
+                        ClaimPermission.Access, null);
+                if (noAccessReason != null) {
+                    // Only rollback once per pearl (multiple tick checks can fire before teleportAsync completes)
+                    if (!pendingEnderPearlRollbacks.add(playerID)) return;
+                    teleportFoliaSafe(p, fromLoc);
+                    GriefPrevention.sendMessage(p, TextMode.Err, noAccessReason.get());
+                    if (instance.config_claims_refundDeniedEnderPearls) {
+                        p.getInventory().addItem(new ItemStack(Material.ENDER_PEARL));
+                    }
+                    SchedulerUtil.runLaterGlobal(instance, () -> pendingEnderPearlRollbacks.remove(playerID), 15L);
+                }
+            }, d);
+        }
+    }
+
     // when a player teleports
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         Player player = event.getPlayer();
         PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
+
+        TeleportCause cause = event.getCause();
 
         // Get the claim at the destination
         Claim toClaim = this.dataStore.getClaimAt(event.getTo(), false, playerData.lastClaim);
@@ -1066,22 +1123,64 @@ class PlayerEventHandler implements Listener {
         Claim fromClaim = playerData.lastClaim;
 
         // Special handling for ender pearls and chorus fruit to prevent gaining access
-        // to secured claims. Must run before updating lastClaim so we don't corrupt
-        // player state when cancelling. Use ProtectionHelper for proper 3D claim and
-        // parent inheritance handling.
+        // to secured claims. On Folia/Canvas, the event may fire from a region thread
+        // where claim lookup fails; run the check on GlobalRegionScheduler so it executes
+        // in a context where getClaimAt returns correct results.
         if (instance.config_claims_enderPearlsRequireAccessTrust) {
-            TeleportCause cause = event.getCause();
             if (cause == TeleportCause.CHORUS_FRUIT || cause == TeleportCause.ENDER_PEARL) {
-                Supplier<String> noAccessReason = ProtectionHelper.checkPermission(player, event.getTo(),
-                        ClaimPermission.Access, event);
-                if (noAccessReason != null) {
-                    GriefPrevention.sendMessage(player, TextMode.Err, noAccessReason.get());
+                Location to = event.getTo();
+                if (to == null || to.getWorld() == null) {
+                    // On Folia/Canvas, getTo() can be null or invalid from region thread
                     event.setCancelled(true);
                     if (cause == TeleportCause.ENDER_PEARL && instance.config_claims_refundDeniedEnderPearls) {
                         player.getInventory().addItem(new ItemStack(Material.ENDER_PEARL));
                     }
-                    return; // Don't update lastClaim when teleport is cancelled
+                    return;
                 }
+                event.setCancelled(true);
+                Location destination = to.clone();
+                Location fromLoc = player.getLocation().clone();
+                UUID playerID = player.getUniqueId();
+                boolean isEnderPearl = (cause == TeleportCause.ENDER_PEARL);
+                if (instance.config_logs_debugEnabled) {
+                    GriefPrevention.AddLogEntry("[DEBUG] EnderPearl/Chorus: cancelled event, scheduling GlobalRegionScheduler check for "
+                            + player.getName() + " -> " + GriefPrevention.getfriendlyLocationString(destination),
+                            CustomLogEntryTypes.Debug, true);
+                }
+                SchedulerUtil.runLaterGlobal(instance, () -> {
+                    Player p = instance.getServer().getPlayer(playerID);
+                    if (p == null || !p.isOnline()) return;
+                    PlayerData data = this.dataStore.getPlayerData(playerID);
+                    // Use actual location - on Folia/Canvas event.getTo() may be wrong; if cancel
+                    // didn't work, player has already teleported
+                    Location actualLoc = p.getLocation();
+                    Claim destClaim = this.dataStore.getClaimAt(actualLoc, false, data.lastClaim);
+                    Supplier<String> noAccessReason = ProtectionHelper.checkPermission(p, actualLoc,
+                            ClaimPermission.Access, null);
+                    if (instance.config_logs_debugEnabled) {
+                        GriefPrevention.AddLogEntry("[DEBUG] EnderPearl/Chorus: check ran for " + p.getName()
+                                + " destClaim=" + (destClaim != null ? "id=" + destClaim.id : "null")
+                                + " noAccessReason=" + (noAccessReason != null ? noAccessReason.get() : "null (allowed)"),
+                                CustomLogEntryTypes.Debug, true);
+                    }
+                    if (noAccessReason != null) {
+                        teleportFoliaSafe(p, fromLoc);
+                        GriefPrevention.sendMessage(p, TextMode.Err, noAccessReason.get());
+                        if (isEnderPearl && instance.config_claims_refundDeniedEnderPearls) {
+                            p.getInventory().addItem(new ItemStack(Material.ENDER_PEARL));
+                        }
+                        return;
+                    }
+                    // Only teleport if cancel worked (player still at origin)
+                    if (actualLoc.distanceSquared(fromLoc) < 1) {
+                        teleportFoliaSafe(p, destination);
+                    }
+                    data.lastClaim = this.dataStore.getClaimAt(p.getLocation(), false, data.lastClaim);
+                    if (data.lastClaim != fromClaim) {
+                        p.updateCommands();
+                    }
+                }, 1L);
+                return;
             }
         }
 
@@ -1236,8 +1335,7 @@ class PlayerEventHandler implements Listener {
             {
                 // ensure this entity can be tamed by players
                 tameable.setOwner(null);
-                if (tameable instanceof InventoryHolder) {
-                    InventoryHolder holder = (InventoryHolder) tameable;
+                if (tameable instanceof InventoryHolder holder) {
                     holder.getInventory().clear();
                 }
             }
@@ -1259,24 +1357,24 @@ class PlayerEventHandler implements Listener {
         if (playerData.ignoreClaims)
             return;
 
-        // don't allow container access during pvp combat
+        // don't allow container access during pvp combat in claimed areas
         if ((entity instanceof StorageMinecart || entity instanceof PoweredMinecart)) {
             if (playerData.inPvpCombat()) {
-                GriefPrevention.sendMessage(player, TextMode.Err, Messages.PvPNoContainers);
-                event.setCancelled(true);
-                return;
+                Claim claim = this.dataStore.getClaimAt(entity.getLocation(), false, playerData.lastClaim);
+                if (claim != null) {
+                    GriefPrevention.sendMessage(player, TextMode.Err, Messages.PvPNoContainers);
+                    event.setCancelled(true);
+                    return;
+                }
             }
         }
 
         // if the entity is a vehicle and we're preventing theft in claims
         if (instance.config_claims_preventTheft && entity instanceof Vehicle) {
-            // if the entity is in a claim
             Claim claim = this.dataStore.getClaimAt(entity.getLocation(), false, null);
             if (claim != null) {
-                // for storage entities, apply container rules (this is a potential theft)
                 if (entity instanceof InventoryHolder) {
-                    Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container,
-                            event);
+                    Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container, event);
                     if (noContainersReason != null) {
                         GriefPrevention.sendRateLimitedErrorMessage(player, noContainersReason.get());
                         event.setCancelled(true);
@@ -1288,9 +1386,8 @@ class PlayerEventHandler implements Listener {
 
         // if the entity is an animal or copper golem, apply container rules
         if ((instance.config_claims_preventTheft && (entity instanceof Animals || entity instanceof Fish
-                || entity.getType().name().equals("COPPER_GOLEM")))
+                || entity instanceof CopperGolem))
                 || (entity.getType() == EntityType.VILLAGER && instance.config_claims_villagerTradingRequiresTrust)) {
-            // if the entity is in a claim
             Claim claim = this.dataStore.getClaimAt(entity.getLocation(), false, null);
             if (claim != null) {
                 Supplier<String> override = () -> {
@@ -1301,8 +1398,7 @@ class PlayerEventHandler implements Listener {
 
                     return message;
                 };
-                final Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container,
-                        event, override);
+                final Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container, event, override);
                 if (noContainersReason != null) {
                     GriefPrevention.sendRateLimitedErrorMessage(player, noContainersReason.get());
                     event.setCancelled(true);
@@ -1314,18 +1410,15 @@ class PlayerEventHandler implements Listener {
         ItemStack itemInHand = instance.getItemInHand(player, event.getHand());
 
         // if preventing theft, prevent leashing claimed creatures and boats
-        if (instance.config_claims_preventTheft && itemInHand.getType() == Material.LEAD) {
-            // Handle creatures (original logic)
-            // Handle creatures and boats (updated for modern Minecraft versions)
-            if (entity.getType().name().contains("BOAT") || entity instanceof Creature) {
-                Claim claim = this.dataStore.getClaimAt(entity.getLocation(), false, playerData.lastClaim);
-                if (claim != null) {
-                    Supplier<String> failureReason = claim.checkPermission(player, ClaimPermission.Container, event);
-                    if (failureReason != null) {
-                        event.setCancelled(true);
-                        GriefPrevention.sendRateLimitedErrorMessage(player, failureReason.get());
-                        return;
-                    }
+        if (instance.config_claims_preventTheft && itemInHand.getType() == Material.LEAD
+                && (entity.getType().name().contains("BOAT") || entity instanceof Creature)) {
+            Claim claim = this.dataStore.getClaimAt(entity.getLocation(), false, playerData.lastClaim);
+            if (claim != null) {
+                Supplier<String> failureReason = claim.checkPermission(player, ClaimPermission.Container, event);
+                if (failureReason != null) {
+                    event.setCancelled(true);
+                    GriefPrevention.sendRateLimitedErrorMessage(player, failureReason.get());
+                    return;
                 }
             }
         }
@@ -1337,7 +1430,6 @@ class PlayerEventHandler implements Listener {
                 return;
 
             Claim cachedClaim = playerData.lastClaim;
-            ;
             Claim claim = this.dataStore.getClaimAt(entity.getLocation(), false, cachedClaim);
 
             // Require a claim to handle.
@@ -1352,8 +1444,7 @@ class PlayerEventHandler implements Listener {
             };
 
             // Check for permission to access containers.
-            Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container, event,
-                    override);
+            Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container, event, override);
 
             // If player has permission, action is allowed.
             if (noContainersReason == null)
@@ -1406,7 +1497,6 @@ class PlayerEventHandler implements Listener {
             PlayerData playerData = instance.dataStore.getPlayerData(player.getUniqueId());
             Claim claim = instance.dataStore.getClaimAt(entity.getLocation(), false, playerData.lastClaim);
             if (claim != null) {
-                // if no permission, cancel
                 Supplier<String> errorMessage = claim.checkPermission(player, ClaimPermission.Container, event);
                 if (errorMessage != null) {
                     event.setCancelled(true);
@@ -1883,16 +1973,18 @@ class PlayerEventHandler implements Listener {
                 return;
             }
 
-            // otherwise check permissions for the claim the player is in
+            // check if player is in a claim for pvp and permission checks below
             Claim claim = this.dataStore.getClaimAt(clickedBlock.getLocation(), false, playerData.lastClaim);
-            if (claim != null) {
-                // block container use during pvp combat, same reason
-                if (playerData.inPvpCombat()) {
-                    GriefPrevention.sendRateLimitedErrorMessage(player, Messages.PvPNoContainers);
-                    event.setCancelled(true);
-                    return;
-                }
 
+            // block container use during pvp combat in claimed areas only - in wilderness, allow
+            // access since blocking won't prevent attackers from getting those items anyway
+            if (playerData.inPvpCombat() && claim != null) {
+                GriefPrevention.sendRateLimitedErrorMessage(player, Messages.PvPNoContainers);
+                event.setCancelled(true);
+                return;
+            }
+
+            if (claim != null) {
                 playerData.lastClaim = claim;
 
                 Supplier<String> noContainersReason = claim.checkPermission(player, ClaimPermission.Container, event);
@@ -1992,7 +2084,10 @@ class PlayerEventHandler implements Listener {
                         clickedBlockType == Material.COMPARATOR ||
                         clickedBlockType == Material.REDSTONE_WIRE ||
                         Tag.FLOWER_POTS.isTagged(clickedBlockType) ||
-                        Tag.CANDLES.isTagged(clickedBlockType))) {
+                        Tag.CANDLES.isTagged(clickedBlockType) ||
+                        Tag.COPPER_GOLEM_STATUES.isTagged(clickedBlockType)
+                ))
+        {
             if (playerData == null)
                 playerData = this.dataStore.getPlayerData(player.getUniqueId());
             Claim claim = this.dataStore.getClaimAt(clickedBlock.getLocation(), false, playerData.lastClaim);
@@ -2868,7 +2963,6 @@ class PlayerEventHandler implements Listener {
             this.z = z;
             this.t = t;
         }
-
     }
 
     private static boolean isCornerMatch(Claim claim, Block block) {
@@ -3041,8 +3135,7 @@ class PlayerEventHandler implements Listener {
         Material cacheKey = clickedBlock.getType();
         Boolean cachedValue = this.inventoryHolderCache.get(cacheKey);
         if (cachedValue != null) {
-            return cachedValue.booleanValue();
-
+            return cachedValue;
         } else {
             boolean isHolder = clickedBlock.getState() instanceof InventoryHolder;
             this.inventoryHolderCache.put(cacheKey, isHolder);

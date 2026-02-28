@@ -325,7 +325,7 @@ public class DatabaseDataStore extends DataStore
                 {
                     if (e.getMessage() != null && e.getMessage().contains("World not found"))
                     {
-                        GriefPrevention.AddLogEntry("Failed to load a claim (ID:" + claimID.toString() + ") because its world isn't loaded (yet?).  Please delete the claim or contact the GriefPrevention developer with information about which plugin(s) you're using to load or create worlds.  " + lesserCornerString);
+                        GriefPrevention.AddLogEntry("Failed to load a claim (ID:" + claimID + ") because its world isn't loaded (yet?).  Please delete the claim or contact the GriefPrevention developer with information about which plugin(s) you're using to load or create worlds.  " + lesserCornerString);
                         continue;
                     }
                     else
@@ -407,7 +407,7 @@ public class DatabaseDataStore extends DataStore
             }
             catch (SQLException e)
             {
-                GriefPrevention.AddLogEntry("Unable to load a claim.  Details: " + e.getMessage() + " ... " + results.toString());
+                GriefPrevention.AddLogEntry("Unable to load a claim.  Details: " + e.getMessage() + " ... " + results);
                 e.printStackTrace();
             }
         }
@@ -565,7 +565,7 @@ public class DatabaseDataStore extends DataStore
         {
             StringWriter errors = new StringWriter();
             e.printStackTrace(new PrintWriter(errors));
-            GriefPrevention.AddLogEntry(playerID + " " + errors.toString(), CustomLogEntryTypes.Exception);
+            GriefPrevention.AddLogEntry(playerID + " " + errors, CustomLogEntryTypes.Exception);
         }
 
         return playerData;
@@ -603,7 +603,7 @@ public class DatabaseDataStore extends DataStore
         {
             StringWriter errors = new StringWriter();
             e.printStackTrace(new PrintWriter(errors));
-            GriefPrevention.AddLogEntry(playerID + " " + errors.toString(), CustomLogEntryTypes.Exception);
+            GriefPrevention.AddLogEntry(playerID + " " + errors, CustomLogEntryTypes.Exception);
         }
     }
 
@@ -671,7 +671,6 @@ public class DatabaseDataStore extends DataStore
                 }
             }
             catch (SQLException e) {}
-            ;
         }
 
         this.databaseConnection = null;
