@@ -557,6 +557,7 @@ public class FlatFileDataStore extends DataStore
 
         // Load explosives allowed setting (default false = protected)
         boolean explosivesAllowed = yaml.getBoolean("Explosives Allowed", false);
+        boolean witherExplosionsAllowed = yaml.getBoolean("Wither Explosions Allowed", false);
 
         //instantiate
         claim = new Claim(lesserBoundaryCorner, greaterBoundaryCorner, ownerID, builders, containers, accessors, managers, inheritNothing, claimID, is3D);
@@ -627,6 +628,7 @@ public class FlatFileDataStore extends DataStore
 
         // Load explosives allowed setting (default false = protected)
         boolean explosivesAllowed = section.getBoolean("Explosives Allowed", false);
+        boolean witherExplosionsAllowed = section.getBoolean("Wither Explosions Allowed", false);
 
         Long childID = null;
         if (section.contains("Claim ID"))
@@ -716,6 +718,7 @@ public class FlatFileDataStore extends DataStore
         section.set("inheritNothingForNewSubdivisions", claim.getInheritNothingForNewSubdivisions());
         section.set("Is3D", claim.is3D());
         section.set("Explosives Allowed", claim.areExplosivesAllowed);
+        section.set("Wither Explosions Allowed", claim.areWitherExplosionsAllowed);
         section.set("Modified Date", claim.modifiedDate != null ? claim.modifiedDate.getTime() : System.currentTimeMillis());
 
         section.set("AllowPvP", claim.allowPvP);
