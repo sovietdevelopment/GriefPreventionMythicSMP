@@ -7,7 +7,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.griefprevention</groupId>
-    <artifactId>GriefPreventionWebMC</artifactId>
+    <artifactId>griefprevention-webmc</artifactId>
     <version>1.0.1+17.3.0</version>
 
     <name>GriefPreventionWebMC</name>
@@ -56,7 +56,7 @@
     </repositories>
 
     <build>
-        <finalName>${project.artifactId}-${project.version}</finalName>
+        <finalName>${project.name}-${project.version}</finalName>
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
