@@ -27,7 +27,7 @@ public class ClaimCommand extends CommandHandler
 {
     public ClaimCommand(@NotNull GriefPrevention plugin)
     {
-        super(plugin, "claim");
+        super(plugin, "createclaim");
     }
 
     @Override
