@@ -2,7 +2,7 @@
 <img alt="GriefPrevention" width=100% height=auto src="https://repository-images.githubusercontent.com/1022939485/dfacdde9-087f-4619-b5a6-78c74b3077fd">
 </p>
 
-<h1 align="center">The self-service anti-griefing plugin for Minecraft servers since 2011</h1>
+<h1 align="center">The (custom!) Anti-Griefing plugin made specifically for Mythic SMP</h1>
 
 <p align="center">
 <a href="https://github.com/castledking/GriefPrevention/releases/tag/17.0.0"><img alt="Downloads" src="https://img.shields.io/badge/Downloads-green" height="70px"></a>
